@@ -17,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	rootcmd "github.com/rudrankriyam/App-Store-Connect-CLI/cmd"
 	"github.com/rudrankriyam/App-Store-Connect-CLI/internal/asc"
 	"github.com/rudrankriyam/App-Store-Connect-CLI/internal/cli/shared"
+	"github.com/rudrankriyam/App-Store-Connect-CLI/internal/handlertest"
 )
 
 func TestScreenshotsPlanAndApplyValidationErrors(t *testing.T) {
@@ -410,115 +412,142 @@ func TestScreenshotsApplyGivesAssetUploadsTheUploadTimeoutBudget(t *testing.T) {
 	}
 }
 
-func TestScreenshotsApplyReportsCompletedGroupsWhenALaterGroupFails(t *testing.T) {
-	setupAuth(t)
-	t.Setenv("ASC_CONFIG_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-	t.Setenv("ASC_APP_ID", "")
-
-	reviewDir, imagePaths := writeTwoSlotScreenshotReviewArtifacts(t)
-	firstInfo, err := os.Stat(imagePaths[0])
-	if err != nil {
-		t.Fatalf("stat review artifact: %v", err)
+func TestScreenshotsApplyReportsCompletedUploadsWhenALaterUploadFails(t *testing.T) {
+	tests := []struct {
+		name              string
+		sameGroup         bool
+		failedDisplayType string
+	}{
+		{name: "later group", failedDisplayType: "APP_IPHONE_65"},
+		{name: "same group", sameGroup: true, failedDisplayType: "APP_IPHONE_61"},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupAuth(t)
+			t.Setenv("ASC_CONFIG_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+			t.Setenv("ASC_APP_ID", "")
 
-	originalTransport := http.DefaultTransport
-	t.Cleanup(func() {
-		http.DefaultTransport = originalTransport
-	})
-
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch {
-		case req.Method == http.MethodGet && req.URL.Path == "/v1/apps/123456789/appStoreVersions":
-			return statusJSONResponse(`{"data":[{"type":"appStoreVersions","id":"version-1","attributes":{"versionString":"1.2.3","platform":"IOS"}}]}`), nil
-		case req.Method == http.MethodGet && req.URL.Path == "/v1/appStoreVersions/version-1/appStoreVersionLocalizations":
-			return statusJSONResponse(`{"data":[{"type":"appStoreVersionLocalizations","id":"LOC_123","attributes":{"locale":"en-US"}}]}`), nil
-		case req.Method == http.MethodGet && req.URL.Path == "/v1/appStoreVersionLocalizations/LOC_123/appScreenshotSets":
-			return statusJSONResponse(`{"data":[{"type":"appScreenshotSets","id":"set-61","attributes":{"screenshotDisplayType":"APP_IPHONE_61"}},{"type":"appScreenshotSets","id":"set-65","attributes":{"screenshotDisplayType":"APP_IPHONE_65"}}],"links":{}}`), nil
-		case req.Method == http.MethodGet && strings.HasPrefix(req.URL.Path, "/v1/appScreenshotSets/"):
-			return statusJSONResponse(`{"data":[],"links":{}}`), nil
-		case req.Method == http.MethodPost && req.URL.Path == "/v1/appScreenshots":
-			body, readErr := io.ReadAll(req.Body)
-			if readErr != nil {
-				t.Fatalf("read screenshot create request: %v", readErr)
+			reviewDir, imagePaths := writeTwoSlotScreenshotReviewArtifacts(t, test.sameGroup)
+			firstInfo, err := os.Stat(imagePaths[0])
+			if err != nil {
+				t.Fatalf("stat review artifact: %v", err)
 			}
-			if strings.Contains(string(body), "set-65") {
-				return jsonHTTPResponse(http.StatusInternalServerError, `{"errors":[{"status":"500","detail":"screenshot reservation failed"}]}`), nil
+
+			firstCompleted := make(chan struct{}, 1)
+			fixture := handlertest.New(t)
+			originalTransport := http.DefaultTransport
+			t.Cleanup(func() {
+				http.DefaultTransport = originalTransport
+			})
+
+			http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case req.Method == http.MethodGet && req.URL.Path == "/v1/apps/123456789/appStoreVersions":
+					return statusJSONResponse(`{"data":[{"type":"appStoreVersions","id":"version-1","attributes":{"versionString":"1.2.3","platform":"IOS"}}]}`), nil
+				case req.Method == http.MethodGet && req.URL.Path == "/v1/appStoreVersions/version-1/appStoreVersionLocalizations":
+					return statusJSONResponse(`{"data":[{"type":"appStoreVersionLocalizations","id":"LOC_123","attributes":{"locale":"en-US"}}]}`), nil
+				case req.Method == http.MethodGet && req.URL.Path == "/v1/appStoreVersionLocalizations/LOC_123/appScreenshotSets":
+					return statusJSONResponse(`{"data":[{"type":"appScreenshotSets","id":"set-61","attributes":{"screenshotDisplayType":"APP_IPHONE_61"}},{"type":"appScreenshotSets","id":"set-65","attributes":{"screenshotDisplayType":"APP_IPHONE_65"}}],"links":{}}`), nil
+				case req.Method == http.MethodGet && strings.HasPrefix(req.URL.Path, "/v1/appScreenshotSets/"):
+					return statusJSONResponse(`{"data":[],"links":{}}`), nil
+				case req.Method == http.MethodPost && req.URL.Path == "/v1/appScreenshots":
+					body, readErr := io.ReadAll(req.Body)
+					if readErr != nil {
+						return nil, fixture.Errorf("read screenshot create request: %v", readErr)
+					}
+					if strings.Contains(string(body), filepath.Base(imagePaths[1])) {
+						return jsonHTTPResponse(http.StatusInternalServerError, `{"errors":[{"status":"500","detail":"screenshot reservation failed"}]}`), nil
+					}
+					return statusJSONResponse(fmt.Sprintf(`{"data":{"type":"appScreenshots","id":"new-61","attributes":{"uploadOperations":[{"method":"PUT","url":"https://upload.example/new-61","length":%d,"offset":0}]}}}`, firstInfo.Size())), nil
+				case req.Method == http.MethodPut && req.URL.Host == "upload.example":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader("")),
+						Header:     http.Header{},
+					}, nil
+				case req.Method == http.MethodPatch && req.URL.Path == "/v1/appScreenshots/new-61":
+					return statusJSONResponse(`{"data":{"type":"appScreenshots","id":"new-61","attributes":{"uploaded":true}}}`), nil
+				case req.Method == http.MethodGet && req.URL.Path == "/v1/appScreenshots/new-61":
+					select {
+					case firstCompleted <- struct{}{}:
+					default:
+					}
+					return statusJSONResponse(`{"data":{"type":"appScreenshots","id":"new-61","attributes":{"sourceFileChecksum":"settled","assetDeliveryState":{"state":"COMPLETE"}}}}`), nil
+				case req.Method == http.MethodPatch && strings.HasSuffix(req.URL.Path, "/relationships/appScreenshots"):
+					return statusJSONResponse(`{}`), nil
+				default:
+					return nil, fixture.Errorf("unexpected request: %s %s", req.Method, req.URL.String())
+				}
+			})
+
+			root := RootCommand("1.2.3")
+			root.FlagSet.SetOutput(io.Discard)
+
+			var runErr error
+			stdout, stderr := captureOutput(t, func() {
+				if err := root.Parse([]string{
+					"screenshots", "apply",
+					"--app", "123456789",
+					"--version", "1.2.3",
+					"--review-output-dir", reviewDir,
+					"--confirm",
+					"--output", "json",
+				}); err != nil {
+					t.Fatalf("parse error: %v", err)
+				}
+				runErr = root.Run(context.Background())
+			})
+
+			select {
+			case <-firstCompleted:
+			default:
+				t.Fatal("expected the first screenshot to complete upload before the command returned")
 			}
-			return statusJSONResponse(fmt.Sprintf(`{"data":{"type":"appScreenshots","id":"new-61","attributes":{"uploadOperations":[{"method":"PUT","url":"https://upload.example/new-61","length":%d,"offset":0}]}}}`, firstInfo.Size())), nil
-		case req.Method == http.MethodPut && req.URL.Host == "upload.example":
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader("")),
-				Header:     http.Header{},
-			}, nil
-		case req.Method == http.MethodPatch && req.URL.Path == "/v1/appScreenshots/new-61":
-			return statusJSONResponse(`{"data":{"type":"appScreenshots","id":"new-61","attributes":{"uploaded":true}}}`), nil
-		case req.Method == http.MethodGet && req.URL.Path == "/v1/appScreenshots/new-61":
-			return statusJSONResponse(`{"data":{"type":"appScreenshots","id":"new-61","attributes":{"sourceFileChecksum":"settled","assetDeliveryState":{"state":"COMPLETE"}}}}`), nil
-		case req.Method == http.MethodPatch && strings.HasSuffix(req.URL.Path, "/relationships/appScreenshots"):
-			return statusJSONResponse(`{}`), nil
-		default:
-			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
-			return nil, nil
-		}
-	})
+			if code := rootcmd.ExitCodeFromError(runErr); code != rootcmd.ExitHTTPInternalServer {
+				t.Fatalf("exit code = %d, want %d for the failed screenshot: %v", code, rootcmd.ExitHTTPInternalServer, runErr)
+			}
+			if stderr != "" {
+				t.Fatalf("expected empty stderr, got %q", stderr)
+			}
+			if stdout == "" {
+				t.Fatal("expected completed upload groups to be reported before the error")
+			}
 
-	root := RootCommand("1.2.3")
-	root.FlagSet.SetOutput(io.Discard)
-
-	var runErr error
-	stdout, stderr := captureOutput(t, func() {
-		if err := root.Parse([]string{
-			"screenshots", "apply",
-			"--app", "123456789",
-			"--version", "1.2.3",
-			"--review-output-dir", reviewDir,
-			"--confirm",
-		}); err != nil {
-			t.Fatalf("parse error: %v", err)
-		}
-		runErr = root.Run(context.Background())
-	})
-
-	if runErr == nil {
-		t.Fatal("expected the failing upload group to surface an error")
-	}
-	if stderr != "" {
-		t.Fatalf("expected empty stderr, got %q", stderr)
-	}
-	if stdout == "" {
-		t.Fatal("expected completed upload groups to be reported before the error")
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("unmarshal output: %v\nstdout=%s", err, stdout)
-	}
-	if payload["errorCount"] != float64(1) {
-		t.Errorf("errorCount=%v, want 1", payload["errorCount"])
-	}
-	issues, ok := payload["issues"].([]any)
-	foundFailure := false
-	for _, raw := range issues {
-		issue := raw.(map[string]any)
-		if issue["severity"] == "error" && issue["displayType"] == "APP_IPHONE_65" && strings.Contains(fmt.Sprint(issue["message"]), "screenshot reservation failed") {
-			foundFailure = true
-		}
-	}
-	if !ok || !foundFailure {
-		t.Errorf("missing failed group issue: %v", payload["issues"])
-	}
-	groups, ok := payload["groups"].([]any)
-	if !ok || len(groups) != 1 {
-		t.Fatalf("expected the completed group to be reported, got %T %v", payload["groups"], payload["groups"])
-	}
-	group := groups[0].(map[string]any)
-	if group["displayType"] != "APP_IPHONE_61" {
-		t.Fatalf("expected completed group APP_IPHONE_61, got %v", group["displayType"])
-	}
-	results := group["result"].(map[string]any)["results"].([]any)
-	if results[0].(map[string]any)["assetId"] != "new-61" {
-		t.Fatalf("expected uploaded assetId new-61, got %v", results[0].(map[string]any)["assetId"])
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+				t.Fatalf("unmarshal output: %v\nstdout=%s", err, stdout)
+			}
+			if payload["errorCount"] != float64(1) {
+				t.Errorf("errorCount=%v, want 1", payload["errorCount"])
+			}
+			issues, ok := payload["issues"].([]any)
+			foundFailure := false
+			for _, raw := range issues {
+				issue := raw.(map[string]any)
+				if issue["severity"] == "error" && issue["displayType"] == test.failedDisplayType && strings.Contains(fmt.Sprint(issue["message"]), "screenshot reservation failed") {
+					foundFailure = true
+				}
+			}
+			if !ok || !foundFailure {
+				t.Errorf("missing failed group issue: %v", payload["issues"])
+			}
+			groups, ok := payload["groups"].([]any)
+			if !ok || len(groups) != 1 {
+				t.Fatalf("expected the group containing the completed screenshot to be reported, got %T %v", payload["groups"], payload["groups"])
+			}
+			group := groups[0].(map[string]any)
+			if group["displayType"] != "APP_IPHONE_61" {
+				t.Fatalf("expected completed group APP_IPHONE_61, got %v", group["displayType"])
+			}
+			results, ok := group["result"].(map[string]any)["results"].([]any)
+			if !ok || len(results) != 1 {
+				t.Fatalf("expected only the successful screenshot receipt, got %v", group["result"])
+			}
+			item := results[0].(map[string]any)
+			if item["assetId"] != "new-61" || item["filePath"] != imagePaths[0] || item["state"] != "COMPLETE" {
+				t.Fatalf("expected completed screenshot receipt with assetId new-61 and path %q, got %v", imagePaths[0], item)
+			}
+		})
 	}
 }
 
@@ -1113,9 +1142,9 @@ func writeScreenshotReviewArtifactsWithPlannedDisplayType(t *testing.T, actualWi
 	)
 }
 
-// writeTwoSlotScreenshotReviewArtifacts writes one approved en-US entry per
-// display type so the plan fans out into two upload groups.
-func writeTwoSlotScreenshotReviewArtifacts(t *testing.T) (string, []string) {
+// writeTwoSlotScreenshotReviewArtifacts writes two approved en-US screenshots
+// in either one display type or two upload groups, with stable file order.
+func writeTwoSlotScreenshotReviewArtifacts(t *testing.T, sameGroup bool) (string, []string) {
 	t.Helper()
 
 	reviewDir := t.TempDir()
@@ -1125,8 +1154,14 @@ func writeTwoSlotScreenshotReviewArtifacts(t *testing.T) (string, []string) {
 		width       int
 		height      int
 	}{
-		{id: "home", displayType: "APP_IPHONE_61", width: 1206, height: 2622},
-		{id: "details", displayType: "APP_IPHONE_65", width: 1284, height: 2778},
+		{id: "01-home", displayType: "APP_IPHONE_61", width: 1206, height: 2622},
+		{id: "02-details", displayType: "APP_IPHONE_65", width: 1284, height: 2778},
+	}
+
+	if sameGroup {
+		slots[1].displayType = slots[0].displayType
+		slots[1].width = slots[0].width
+		slots[1].height = slots[0].height
 	}
 
 	imagePaths := make([]string, 0, len(slots))
