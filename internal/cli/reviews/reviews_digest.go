@@ -257,6 +257,7 @@ func buildReviewDigest(ctx context.Context, client *asc.Client, appID string, cu
 	territoryIndex := map[string]int{}
 	territorySums := []int{}
 	reviews := []asc.CustomerReviewDigestReview{}
+	seenReviewIDs := map[string]struct{}{}
 
 	consume := func(page asc.PaginatedResponse) error {
 		response, ok := page.(*asc.ReviewsResponse)
@@ -264,6 +265,10 @@ func buildReviewDigest(ctx context.Context, client *asc.Client, appID string, cu
 			return fmt.Errorf("unexpected response type %T", page)
 		}
 		for _, item := range response.Data {
+			if _, seen := seenReviewIDs[item.ID]; seen {
+				continue
+			}
+			seenReviewIDs[item.ID] = struct{}{}
 			created, ok := shared.ParseRFC3339Date(item.Attributes.CreatedDate)
 			if !ok {
 				return fmt.Errorf("review %q has invalid createdDate %q", item.ID, item.Attributes.CreatedDate)
