@@ -21,6 +21,7 @@ const (
 		{"type":"customerReviews","id":"r2","attributes":{"rating":1,"title":"Crash","body":"Crashes on launch","createdDate":"2026-10-19T09:00:00Z","territory":"GBR"},"relationships":{"response":{"data":null}}}
 	],"links":{"next":"https://api.appstoreconnect.apple.com/v1/apps/app-1/customerReviews?cursor=page2"}}`
 	reviewsDigestPage2 = `{"data":[
+		{"type":"customerReviews","id":"r2","attributes":{"rating":1,"title":"Crash","body":"Crashes on launch","createdDate":"2026-10-19T09:00:00Z","territory":"GBR"},"relationships":{"response":{"data":null}}},
 		{"type":"customerReviews","id":"r3","attributes":{"rating":2,"title":"Slow","body":"Too slow","createdDate":"2026-10-18T08:00:00Z","territory":"USA"}},
 		{"type":"customerReviews","id":"r4","attributes":{"rating":1,"title":"Old","body":"Before cursor","createdDate":"2026-10-15T00:00:00Z","territory":"USA"}}
 	],"links":{"next":"https://api.appstoreconnect.apple.com/v1/apps/app-1/customerReviews?cursor=page3"}}`
