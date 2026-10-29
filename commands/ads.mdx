@@ -290,7 +290,7 @@ requires `--confirm` before authentication or network access.
 {"name":"Paused validation campaign","status":"PAUSED"}
 ```
 
-Delete commands require `--confirm`. Platform v1 has no bulk-delete operation:
+Delete commands require `--confirm` and currently operate on individual IDs:
 
 ```bash  theme={null}
 asc ads campaigns delete --ad-account "987654" --campaign "campaign-id" --confirm
@@ -485,9 +485,10 @@ Platform API v1 has no equivalent single command for these removed
 
 Do not replace the countries or devices mappings with `geo search`, or replace
 custom impression-share report list/view with `insights impression-share`
-without checking the different data contract. V1 has single-resource keyword
-deletes, but no bulk-delete endpoint; a script can query and explicitly delete
-individual IDs if that workflow is appropriate.
+without checking the different data contract. Apple v1 supports bulk-delete
+endpoints for [keywords](https://developer.apple.com/documentation/Apple-Ads-Platform-API/POST-keywords-bulk-delete)
+and [negative keywords](https://developer.apple.com/documentation/Apple-Ads-Platform-API/POST-negative-keywords-bulk-delete).
+The CLI currently exposes per-ID deletes and no dedicated bulk-delete command.
 
 ## Raw API Requests
 
