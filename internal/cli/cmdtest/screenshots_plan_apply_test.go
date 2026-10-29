@@ -160,6 +160,65 @@ func TestScreenshotsPlanBuildsApprovedUploadGroups(t *testing.T) {
 	}
 }
 
+func TestScreenshotsPlanReportsStdoutWriteFailures(t *testing.T) {
+	setupAuth(t)
+	t.Setenv("ASC_CONFIG_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	reviewDir, _ := writeScreenshotReviewArtifacts(t)
+
+	for _, format := range []string{"table", "markdown", "json"} {
+		t.Run(format, func(t *testing.T) {
+			requests := 0
+			installDefaultTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet {
+					t.Fatalf("unexpected mutation: %s %s", req.Method, req.URL)
+				}
+				requests++
+				switch req.URL.Path {
+				case "/v1/apps/123456789/appStoreVersions":
+					return statusJSONResponse(`{"data":[{"type":"appStoreVersions","id":"version-1","attributes":{"versionString":"1.2.3","platform":"IOS"}}]}`), nil
+				case "/v1/appStoreVersions/version-1/appStoreVersionLocalizations":
+					return statusJSONResponse(`{"data":[{"type":"appStoreVersionLocalizations","id":"LOC_123","attributes":{"locale":"en-US"}}]}`), nil
+				case "/v1/appStoreVersionLocalizations/LOC_123/appScreenshotSets":
+					return statusJSONResponse(`{"data":[],"links":{}}`), nil
+				default:
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+					return nil, nil
+				}
+			}))
+
+			readOnly, err := os.Open(filepath.Join(reviewDir, "manifest.json"))
+			if err != nil {
+				t.Fatalf("open read-only stdout: %v", err)
+			}
+			t.Cleanup(func() { _ = readOnly.Close() })
+
+			var code int
+			_, stderr := captureOutput(t, func() {
+				originalStdout := os.Stdout
+				os.Stdout = readOnly
+				defer func() { os.Stdout = originalStdout }()
+				code = rootcmd.Run([]string{
+					"screenshots", "plan",
+					"--app", "123456789",
+					"--version", "1.2.3",
+					"--review-output-dir", reviewDir,
+					"--output", format,
+				}, "1.2.3")
+			})
+
+			if requests != 3 {
+				t.Fatalf("requests = %d, want completed plan preflight (3 GETs); stderr=%q", requests, stderr)
+			}
+			if code != rootcmd.ExitError {
+				t.Fatalf("exit code = %d, want %d for stdout write failure; stderr=%q", code, rootcmd.ExitError, stderr)
+			}
+			if want := "write " + readOnly.Name() + ":"; !strings.Contains(stderr, want) {
+				t.Fatalf("stderr = %q, want stdout write error containing %q", stderr, want)
+			}
+		})
+	}
+}
+
 func TestScreenshotsPlanVersionIDUsesResolvedPlatformWithoutExplicitPlatform(t *testing.T) {
 	for _, selector := range []string{"--version-id", "--version"} {
 		t.Run(selector, func(t *testing.T) { testScreenshotsPlanVersionIDPlatform(t, selector) })

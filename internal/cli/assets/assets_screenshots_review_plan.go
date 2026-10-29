@@ -545,7 +545,24 @@ func renderScreenshotReviewPlanResult(result *screenshotReviewPlanResult, markdo
 		return fmt.Errorf("result is nil")
 	}
 
-	shared.RenderSection("Summary", []string{"field", "value"}, [][]string{
+	renderSection := func(title string, headers []string, rows [][]string) error {
+		heading := shared.Bold(strings.ToUpper(title)) + "\n"
+		renderRows := asc.WriteTable
+		if markdown {
+			heading = fmt.Sprintf("### %s\n\n", title)
+			renderRows = asc.WriteMarkdown
+		}
+		if _, err := fmt.Fprint(os.Stdout, heading); err != nil {
+			return err
+		}
+		if err := renderRows(headers, rows); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintln(os.Stdout)
+		return err
+	}
+
+	if err := renderSection("Summary", []string{"field", "value"}, [][]string{
 		{"appId", result.AppID},
 		{"version", result.Version},
 		{"versionId", result.VersionID},
@@ -558,7 +575,9 @@ func renderScreenshotReviewPlanResult(result *screenshotReviewPlanResult, markdo
 		{"plannedGroups", fmt.Sprintf("%d", result.PlannedGroups)},
 		{"errorCount", fmt.Sprintf("%d", result.ErrorCount)},
 		{"warningCount", fmt.Sprintf("%d", result.WarningCount)},
-	}, markdown)
+	}); err != nil {
+		return err
+	}
 
 	if len(result.Groups) > 0 {
 		rows := make([][]string, 0, len(result.Groups))
@@ -571,7 +590,9 @@ func renderScreenshotReviewPlanResult(result *screenshotReviewPlanResult, markdo
 				summarizeUploadStates(group.Result.Results),
 			})
 		}
-		shared.RenderSection("Groups", []string{"locale", "displayType", "versionLocalizationId", "files", "result"}, rows, markdown)
+		if err := renderSection("Groups", []string{"locale", "displayType", "versionLocalizationId", "files", "result"}, rows); err != nil {
+			return err
+		}
 	}
 
 	if len(result.Issues) > 0 {
@@ -585,7 +606,9 @@ func renderScreenshotReviewPlanResult(result *screenshotReviewPlanResult, markdo
 				shared.OrNA(issue.Remediation),
 			})
 		}
-		shared.RenderSection("Issues", []string{"severity", "locale", "displayType", "message", "remediation"}, rows, markdown)
+		if err := renderSection("Issues", []string{"severity", "locale", "displayType", "message", "remediation"}, rows); err != nil {
+			return err
+		}
 	}
 
 	return nil
