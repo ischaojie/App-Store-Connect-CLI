@@ -448,24 +448,26 @@ func executeScreenshotReviewPlan(ctx context.Context, opts screenshotReviewPlanO
 	for _, key := range groupKeys {
 		files := cloneSortedFiles(groupedFiles[key])
 		uploadResult, err := uploadScreenshots(uploadParentCtx, client, key.localizationID, key.displayType, files, opts.SkipExisting, opts.Replace, !opts.Apply)
+		if err == nil || len(uploadResult.Results) > 0 {
+			result.Groups = append(result.Groups, screenshotReviewPlanGroup{
+				Locale:                key.locale,
+				VersionLocalizationID: key.localizationID,
+				DisplayType:           key.displayType,
+				Files:                 files,
+				Result:                uploadResult,
+			})
+		}
 		if err != nil {
 			appendScreenshotReviewIssue(result, "error", "", key.locale, key.displayType, err.Error(), "")
 			return result, fmt.Errorf("screenshots %s: %w", reviewPlanVerb(opts.Apply), err)
 		}
-		result.Groups = append(result.Groups, screenshotReviewPlanGroup{
-			Locale:                key.locale,
-			VersionLocalizationID: key.localizationID,
-			DisplayType:           key.displayType,
-			Files:                 files,
-			Result:                uploadResult,
-		})
 	}
 
 	return result, nil
 }
 
 // printScreenshotReviewPlanResult renders whatever the run produced, including
-// the groups that completed before a failing group aborted the run.
+// completed screenshot receipts from a group that failed partway through.
 func printScreenshotReviewPlanResult(result *screenshotReviewPlanResult, output shared.OutputFlags) error {
 	if result == nil {
 		return nil
