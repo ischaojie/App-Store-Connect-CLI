@@ -548,13 +548,18 @@ func planOpenSSLImportWrites(certificates []openSSLImportCertificate, profiles [
 		}
 	}
 
-	contextScopes := make(map[string]string)
+	contextScopes := make(map[string]openSSLImportProfile)
+	sourceProfileUUIDs := make(map[string]struct{})
 	plannedProfilePaths := make(map[string]struct{})
 	for _, profile := range profiles {
 		storedProfile, stored := storedProfiles[profile.uuid]
 		if stored && !bytes.Equal(storedProfile.Plaintext, profile.content) {
+			if _, imported := sourceProfileUUIDs[profile.uuid]; imported {
+				return nil, fmt.Errorf("source contains different profiles with UUID %s", profile.uuid)
+			}
 			return nil, fmt.Errorf("destination already has a different profile with UUID %s", profile.uuid)
 		}
+		sourceProfileUUIDs[profile.uuid] = struct{}{}
 		profilePath := canonicalSigningPullPath(storedProfile.RelativePath)
 		if !stored {
 			profileDir := path.Join("profiles", profileDirectoryName(profile.profileType))
@@ -565,6 +570,7 @@ func planOpenSSLImportWrites(certificates []openSSLImportCertificate, profiles [
 			}
 			plannedProfilePaths[strings.ToLower(profilePath)] = struct{}{}
 			writes = append(writes, openSSLImportWrite{relPath: profilePath, plaintext: profile.content})
+			storedProfiles[profile.uuid] = decryptedSigningFile{RelativePath: profilePath, Plaintext: profile.content}
 		}
 		if !profile.profile.ExpirationDate.After(now) {
 			continue
@@ -590,9 +596,12 @@ func planOpenSSLImportWrites(certificates []openSSLImportCertificate, profiles [
 		teamID := certificateTeamID(bound.cert)
 		scope := strings.Join([]string{teamID, profile.bundleID, profile.profileType}, "\x00")
 		if prior, exists := contextScopes[scope]; exists {
-			return nil, fmt.Errorf("profiles %s and %s are both active %s profiles for %s; remove one from the source", prior, profile.sourcePath, profile.profileType, profile.bundleID)
+			if prior.uuid == profile.uuid {
+				continue
+			}
+			return nil, fmt.Errorf("profiles %s and %s are both active %s profiles for %s; remove one from the source", prior.sourcePath, profile.sourcePath, profile.profileType, profile.bundleID)
 		}
-		contextScopes[scope] = profile.sourcePath
+		contextScopes[scope] = profile
 		profileDigest := sha256.Sum256(profile.content)
 		binding := identityContextBinding{
 			CertificateSHA256: bound.sha256,
