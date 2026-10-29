@@ -85,7 +85,7 @@ winget install --id Rorkai.ASC --exact
 
 The WinGet package is tracked in
 [GitHub Discussion #1552](https://github.com/rorkai/App-Store-Connect-CLI/discussions/1552).
-Until it appears in `winget search asc`, Windows users can download the signed
+Until it appears in `winget search asc`, Windows users can download the
 release binaries directly from the
 [GitHub releases page](https://github.com/rorkai/App-Store-Connect-CLI/releases/latest).
 
