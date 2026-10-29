@@ -158,6 +158,11 @@ func runSigningSyncImport(t *testing.T, args ...string) (string, string, error) 
 
 func TestSigningSyncImportWritesPullableStore(t *testing.T) {
 	fixture := newOpenSSLImportFixture(t, 1)
+	content, err := os.ReadFile(filepath.Join(fixture.dir, "profiles", "appstore", "AppStore_com.example.app.mobileprovision"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePrivateTestFile(t, filepath.Join(fixture.dir, "profiles", "appstore", "duplicate.mobileprovision"), content)
 	remoteURL, remotePath := newSigningSyncBareRemote(t)
 	passwordFile := filepath.Join(t.TempDir(), "password")
 	writePrivateTestFile(t, passwordFile, []byte(importDestinationPassword))
@@ -367,6 +372,21 @@ func TestSigningSyncImportFailuresWriteNothing(t *testing.T) {
 			wantErr: "decrypt certs/development/CERT2.cer: wrong password or not an OpenSSL-encrypted signing file",
 		},
 		{
+			name: "conflicting source profiles with the same UUID",
+			mutate: func(t *testing.T, fixture openSSLImportFixture) {
+				conflict := newOpenSSLImportFixture(t, 1)
+				content, err := os.ReadFile(filepath.Join(conflict.dir, "profiles", "appstore", "AppStore_com.example.app.mobileprovision"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				writePrivateTestFile(t, filepath.Join(fixture.dir, "profiles", "appstore", "duplicate.mobileprovision"), content)
+				if err := os.RemoveAll(filepath.Join(fixture.dir, "certs")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: "source contains different profiles with UUID " + importProfileUUID,
+		},
+		{
 			name: "private key does not match certificate",
 			mutate: func(t *testing.T, fixture openSSLImportFixture) {
 				keyDER, err := x509.MarshalPKCS8PrivateKey(mustRSAKey(t))
@@ -451,7 +471,7 @@ func TestSigningSyncImportFailuresWriteNothing(t *testing.T) {
 			_, _, err := runSigningSyncImport(t, "--source", fixture.dir, "--source-password", password,
 				"--repo", remoteURL, "--password-file", passwordFile, "--confirm")
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("error = %v, want %q", err, test.wantErr)
+				t.Errorf("error = %v, want %q", err, test.wantErr)
 			}
 			if !reflect.DeepEqual(remoteTree(t, remotePath), before) {
 				t.Fatal("failed import changed the destination")
