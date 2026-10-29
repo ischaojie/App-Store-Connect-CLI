@@ -483,7 +483,7 @@ func TestWebReviewIAPsAttachDraftSelectionAndMembership(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Changed != tc.wantChanged || result.Submission.ID != "item-1" || result.Submission.ReviewSubmissionID != "draft-1" || result.Submission.InAppPurchaseVersionID != "version-1" || result.Submission.SubmitWithNextAppStoreVersion {
+			if result.Changed != tc.wantChanged || result.Submission.ID != "" || result.Submission.ReviewSubmissionItemID != "item-1" || result.Submission.ReviewSubmissionID != "draft-1" || result.Submission.InAppPurchaseVersionID != "version-1" || result.Submission.SubmitWithNextAppStoreVersion {
 				t.Fatalf("unexpected receipt: %#v", result)
 			}
 		})

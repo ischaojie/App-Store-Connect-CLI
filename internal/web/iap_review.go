@@ -24,7 +24,9 @@ type ReviewIAP struct {
 
 // ReviewIAPSubmission is the receipt for an IAP version added to a review draft.
 type ReviewIAPSubmission struct {
+	// ID is the legacy inAppPurchaseSubmissions ID, empty for review-item attachment.
 	ID                            string `json:"id"`
+	ReviewSubmissionItemID        string `json:"reviewSubmissionItemId,omitempty"`
 	InAppPurchaseID               string `json:"inAppPurchaseId,omitempty"`
 	ReviewSubmissionID            string `json:"reviewSubmissionId,omitempty"`
 	InAppPurchaseVersionID        string `json:"inAppPurchaseVersionId,omitempty"`

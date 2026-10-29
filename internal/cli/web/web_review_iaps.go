@@ -41,7 +41,7 @@ func buildReviewIAPMutationRows(payload reviewIAPMutationOutput) [][]string {
 		{"Mutation", "IAP ID", reviewIAPValue(payload.IAPID)},
 		{"Mutation", "Operation", reviewIAPValue(payload.Operation)},
 		{"Mutation", "Changed", strconv.FormatBool(payload.Changed)},
-		{"Submission", "Item ID", reviewIAPValue(payload.Submission.ID)},
+		{"Submission", "Item ID", reviewIAPValue(payload.Submission.ReviewSubmissionItemID)},
 		{"Submission", "Review Draft ID", reviewIAPValue(payload.Submission.ReviewSubmissionID)},
 		{"Submission", "IAP Version ID", reviewIAPValue(payload.Submission.InAppPurchaseVersionID)},
 		{"Submission", "Next Version", strconv.FormatBool(payload.Submission.SubmitWithNextAppStoreVersion)},
@@ -211,7 +211,9 @@ Add the single editable IAP version to an existing READY_FOR_REVIEW draft.
 When several drafts exist, choose one with --submission. No draft is created.
 This stages the IAP for review; it does not submit the draft to Apple.
 The receipt includes the review draft and IAP version IDs. Its legacy
-submitWithNextAppStoreVersion field is true only when the selected draft
+submission.id is empty because this flow creates no legacy IAP submission;
+submission.reviewSubmissionItemId identifies the actual draft item.
+The legacy submitWithNextAppStoreVersion field is true only when the selected draft
 already has an App Store version associated with it.
 
 The --iap-id selector accepts the Iris resource id, the bundle-style productId,
@@ -292,7 +294,7 @@ expose the public numeric ASC IAP id, so that numeric id is not resolved by this
 				Operation: "attach",
 				Changed:   changed,
 				Submission: webcore.ReviewIAPSubmission{
-					ID:                            itemID,
+					ReviewSubmissionItemID:        itemID,
 					InAppPurchaseID:               resolvedV2ID,
 					ReviewSubmissionID:            draft.ID,
 					InAppPurchaseVersionID:        versionID,

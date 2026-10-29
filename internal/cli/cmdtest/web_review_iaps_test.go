@@ -85,7 +85,7 @@ func TestWebReviewIAPsAttachRootSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	var want map[string]any
-	if err := json.Unmarshal([]byte(`{"appId":"123456789","iapId":"com.example.removeads","operation":"attach","changed":true,"submission":{"id":"item-1","inAppPurchaseId":"9000000001","reviewSubmissionId":"draft-1","inAppPurchaseVersionId":"iap-version","submitWithNextAppStoreVersion":false}}`), &want); err != nil {
+	if err := json.Unmarshal([]byte(`{"appId":"123456789","iapId":"com.example.removeads","operation":"attach","changed":true,"submission":{"id":"","reviewSubmissionItemId":"item-1","inAppPurchaseId":"9000000001","reviewSubmissionId":"draft-1","inAppPurchaseVersionId":"iap-version","submitWithNextAppStoreVersion":false}}`), &want); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
