@@ -83,6 +83,9 @@ func buildDeepValidation(ctx context.Context, report validation.Report, client d
 		SessionStatus: sessionStatus,
 		Checks:        make([]validation.DeepCheck, 0, 5),
 	}
+	if report.Deep != nil {
+		deep.Checks = append(deep.Checks, report.Deep.Checks...)
+	}
 	findings := make([]validation.CheckResult, 0, 4)
 
 	if client == nil || sessionStatus != validation.DeepSessionCached {
@@ -181,7 +184,7 @@ func scopeResolutionCommands(resolution *validation.Resolution, appleID string) 
 	}
 	selector := fmt.Sprintf(" --apple-id %q", strings.TrimSpace(appleID))
 	for i, command := range resolution.Commands {
-		if strings.Contains(command, "--apple-id") {
+		if !strings.HasPrefix(command, "asc web ") || strings.Contains(command, "--apple-id") {
 			continue
 		}
 		if confirmIndex := strings.Index(command, " --confirm"); confirmIndex >= 0 {
