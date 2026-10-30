@@ -470,10 +470,13 @@ func TestRequiredAgreementFallbackReportKeepsDeepPublicGatesUnverified(t *testin
 		VersionID: "version-1",
 		Strict:    true,
 	})
-	if report.Summary.Errors != 1 || report.Summary.Warnings != 2 || report.Summary.Blocking != 3 {
+	if report.Summary.Errors != 1 || report.Summary.Warnings != 3 || report.Summary.Blocking != 4 {
 		t.Fatalf("fallback summary = %#v", report.Summary)
 	}
 	deep, _ := buildDeepValidation(context.Background(), report, nil, validation.DeepSessionUnavailable)
+	if got := deepCheckByID(t, deep, validation.DeepCheckIAPAttachment); got.Status != validation.DeepStatusUnverified || got.Source != validation.DeepSourcePublicAPI {
+		t.Fatalf("IAP attachment check = %#v, want unverified public API evidence", got)
+	}
 	if got := deepCheckByID(t, deep, validation.DeepCheckAvailabilityConfigured); got.Status != validation.DeepStatusUnverified {
 		t.Fatalf("availability check = %#v, want unverified", got)
 	}
