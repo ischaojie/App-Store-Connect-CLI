@@ -23,7 +23,7 @@ func PricingPPPCommand() *ffcli.Command {
 		ErrorPrefix:  "pricing ppp",
 		Examples: `  asc pricing ppp --app "123456789" --base-price "4.99" --dry-run
   asc pricing ppp --app "123456789" --base-price "4.99" --round down --dry-run --output table
-  asc pricing ppp --app "123456789" --base-price "4.99" --confirm
+  asc pricing ppp --app "123456789" --base-price "4.99" --territory "IN,BR,MX" --confirm
   asc pricing ppp --app "123456789" --base-territory "GBR" --base-price "3.99" --start-date "YYYY-MM-DD" --confirm`,
 		BindResource: func(fs *flag.FlagSet) shared.PriceSchedulePPPResource {
 			appID := fs.String("app", "", "App Store Connect app ID (or ASC_APP_ID)")
@@ -47,6 +47,9 @@ func appPPPSurface(client *asc.Client, appID string) shared.PriceSchedulePPPSurf
 	return shared.PriceSchedulePPPSurface{
 		AppID:           appID,
 		LadderBatchSize: 10,
+		ReadSchedule: func(ctx context.Context) (shared.PPPScheduleSnapshot, error) {
+			return readAppPPPSchedule(ctx, client, appID)
+		},
 		CurrentPrices: func(ctx context.Context, at time.Time) ([]shared.ResolvedPriceRow, error) {
 			schedule, err := shared.RetryReadWithFreshTimeout(ctx, func(requestCtx context.Context) (*asc.AppPriceScheduleResponse, error) {
 				return client.GetAppPriceSchedule(requestCtx, appID)

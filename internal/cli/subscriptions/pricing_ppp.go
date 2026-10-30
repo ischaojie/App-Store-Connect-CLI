@@ -24,6 +24,7 @@ func SubscriptionsPricingPPPCommand() *ffcli.Command {
 	subscriptionID := shared.BindResourceIDFlag(fs, "subscription-id", "subscriptions", "Subscription ID, product ID, or exact current name (required)")
 	appID := addSubscriptionLookupAppFlag(fs)
 	baseTerritory := fs.String("base-territory", "USA", "Base territory (accepts alpha-2, alpha-3, or exact English country name)")
+	selection := shared.BindOnceCSVFlag(fs, "territory", "Only change these territories (comma-separated alpha-2, alpha-3, or English names)")
 	basePrice := fs.String("base-price", "", "Customer price in the base territory (required)")
 	rounding := fs.String("round", string(shared.PriceRoundingNearest), "Price-point resolution: exact, nearest, up, or down")
 	startDate := fs.String("start-date", "", "Start date (YYYY-MM-DD) for scheduled price changes")
@@ -59,14 +60,15 @@ conversion factor, GDP (PA.NUS.PPP) divided by the official exchange rate
 License: CC BY 4.0. Series last updated ` + pppindex.AsOf + `.
 Territories without a price level are skipped and keep their current price.
 
-The subscription must already have UPFRONT prices; only territories it is
-priced in are planned. Sale availability is not changed. --confirm builds a
+--territory limits changes to the listed countries priced on the effective date.
+The subscription must already have UPFRONT prices; only territories priced on
+the effective date are planned. Sale availability is not changed. --confirm builds a
 fresh plan, applies changed territories, and reads the prices back.
 
 Examples:
   asc subscriptions pricing ppp --subscription-id "SUB_ID" --base-price "9.99" --dry-run
   asc subscriptions pricing ppp --subscription-id "SUB_ID" --base-price "9.99" --round down --dry-run --output table
-  asc subscriptions pricing ppp --subscription-id "SUB_ID" --base-price "9.99" --confirm
+  asc subscriptions pricing ppp --subscription-id "SUB_ID" --base-price "9.99" --territory "IN,BR,MX" --confirm
   asc subscriptions pricing ppp --subscription-id "SUB_ID" --base-territory "GBR" --base-price "7.99" --start-date "YYYY-MM-DD" --confirm`,
 		FlagSet:   fs,
 		UsageFunc: shared.DefaultUsageFunc,
@@ -117,6 +119,10 @@ Examples:
 				return err
 			}
 
+			selected, err := shared.PPPTerritorySelection(selection)
+			if err != nil {
+				return err
+			}
 			client, err := shared.GetASCClient()
 			if err != nil {
 				return fmt.Errorf("subscriptions pricing ppp: %w", err)
@@ -149,6 +155,22 @@ Examples:
 			}
 			if len(currentPrices.Prices) == 0 {
 				return fmt.Errorf("subscriptions pricing ppp: subscription has no current UPFRONT prices; initialize its pricing with `asc subscriptions pricing equalize` first")
+			}
+
+			if len(selected) > 0 {
+				byTerritory := make(map[string]shared.ResolvedPriceRow, len(currentPrices.Prices))
+				for _, row := range currentPrices.Prices {
+					byTerritory[row.Territory] = row
+				}
+				scoped := make([]shared.ResolvedPriceRow, 0, len(selected))
+				for _, territory := range selected {
+					row, exists := byTerritory[territory]
+					if !exists {
+						return fmt.Errorf("subscriptions pricing ppp: requested territory %s has no current price", territory)
+					}
+					scoped = append(scoped, row)
+				}
+				currentPrices.Prices = scoped
 			}
 
 			fmt.Fprintf(os.Stderr, "Finding %s price point for %s...\n", territory, price)
