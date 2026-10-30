@@ -85,9 +85,12 @@ Show the App Store Connect agreement alert banner and the team's Apple
 Developer Program agreement history, including whether an updated agreement
 is waiting for the Account Holder.
 
-An agreement is reported as pending when App Store Connect shows an agreement
-alert banner or when the agreement's accepted date is older than its
-effective date.
+The compatibility field pending is true when App Store Connect shows an
+agreement alert or an agreement's accepted date is older than its effective
+date. pendingAgreementIds lists only IDs identified as pending in history.
+An alert alone does not identify an agreement to accept. Review warnings and
+the Apple account before choosing an ID; do not reaccept an accepted row
+solely because pending is true.
 
 Example:
   asc web agreements status

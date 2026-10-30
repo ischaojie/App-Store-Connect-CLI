@@ -100,6 +100,10 @@ func TestGetAgreementsStatusReportsPendingAgreement(t *testing.T) {
 	if !agreement.Pending {
 		t.Fatal("agreement Pending = false, want true")
 	}
+	if len(result.PendingAgreementIDs) != 1 || result.PendingAgreementIDs[0] != agreement.AgreementID || len(result.Warnings) != 0 {
+		t.Fatalf("pending IDs/warnings = %v/%v, want only pending history ID", result.PendingAgreementIDs, result.Warnings)
+	}
+
 	if agreement.Version != "5031" || agreement.Status != "active" {
 		t.Fatalf("agreement version/status = %q/%q, want 5031/active", agreement.Version, agreement.Status)
 	}
@@ -119,38 +123,80 @@ func TestGetAgreementsStatusReportsPendingAgreement(t *testing.T) {
 	}
 }
 
-func TestGetAgreementsStatusNotPendingWhenAccepted(t *testing.T) {
-	requestCount := 0
-	client := agreementsTestClient(t, func(r *http.Request) (*http.Response, error) {
-		requestCount++
-		switch requestCount {
-		case 1:
-			return developerPortalTestResponse(http.StatusOK, `[ ]`, nil), nil
-		case 2:
-			return developerPortalTestResponse(http.StatusOK, developerPortalTeamsFixture(), nil), nil
-		case 3:
-			return developerPortalTestResponse(http.StatusOK, agreementHistoryFixture(true), nil), nil
-		default:
-			t.Fatalf("unexpected extra request %s %s", r.Method, r.URL.String())
-			return nil, nil
-		}
-	})
+func TestGetAgreementsStatusHistoryEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		banner  bool
+		history string
+		pending bool
+		count   int
+		warning bool
+	}{
+		{"accepted", false, agreementHistoryFixture(true), false, 1, false},
+		{"alert with accepted history", true, agreementHistoryFixture(true), true, 1, true},
+		{"alert with empty history", true, `{"resultCode":0,"agreements":[]}`, true, 0, true},
+		{"pending without ID", true, strings.ReplaceAll(agreementHistoryFixture(false), "XG8DNV4HYY", ""), true, 1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requestCount := 0
+			client := agreementsTestClient(t, func(r *http.Request) (*http.Response, error) {
+				requestCount++
+				switch requestCount {
+				case 1:
+					if test.banner {
+						return developerPortalTestResponse(http.StatusOK, contractMessagesFixture(), nil), nil
+					}
+					return developerPortalTestResponse(http.StatusOK, `[ ]`, nil), nil
+				case 2:
+					return developerPortalTestResponse(http.StatusOK, developerPortalTeamsFixture(), nil), nil
+				case 3:
+					return developerPortalTestResponse(http.StatusOK, test.history, nil), nil
+				default:
+					t.Fatalf("unexpected extra request %s %s", r.Method, r.URL.String())
+					return nil, nil
+				}
+			})
 
-	result, err := client.GetAgreementsStatus(context.Background())
-	if err != nil {
-		t.Fatalf("GetAgreementsStatus() error: %v", err)
-	}
-	if result.Pending {
-		t.Fatal("Pending = true, want false")
-	}
-	if len(result.ContractMessages) != 0 {
-		t.Fatalf("ContractMessages = %+v, want empty", result.ContractMessages)
-	}
-	if len(result.Agreements) != 1 || result.Agreements[0].Pending {
-		t.Fatalf("Agreements = %+v, want one accepted agreement", result.Agreements)
-	}
-	if result.Agreements[0].DateAccepted == "" {
-		t.Fatal("DateAccepted is empty, want RFC3339 timestamp")
+			result, err := client.GetAgreementsStatus(context.Background())
+			if err != nil {
+				t.Fatalf("GetAgreementsStatus() error: %v", err)
+			}
+			if result.Pending != test.pending {
+				t.Fatalf("Pending = %t, want %t", result.Pending, test.pending)
+			}
+			if (len(result.ContractMessages) > 0) != test.banner {
+				t.Fatalf("ContractMessages = %+v, want banner=%t", result.ContractMessages, test.banner)
+			}
+			if len(result.Agreements) != test.count {
+				t.Fatalf("Agreements = %+v, want %d rows", result.Agreements, test.count)
+			}
+			if !test.pending && (result.Agreements[0].Pending || result.Agreements[0].DateAccepted == "") {
+				t.Fatalf("Agreements = %+v, want accepted row", result.Agreements)
+			}
+
+			data, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if string(payload["pendingAgreementIds"]) != "[]" {
+				t.Fatalf("pendingAgreementIds = %s, want [] for accepted history", payload["pendingAgreementIds"])
+			}
+			var warnings []string
+			if err := json.Unmarshal(payload["warnings"], &warnings); err != nil {
+				t.Fatal(err)
+			}
+			if test.warning {
+				if len(warnings) != 1 || !strings.Contains(warnings[0], "does not identify a pending agreement") {
+					t.Fatalf("warnings = %v, want unresolved alert warning", warnings)
+				}
+			} else if string(payload["warnings"]) != "[]" {
+				t.Fatalf("warnings = %s, want []", payload["warnings"])
+			}
+		})
 	}
 }
 

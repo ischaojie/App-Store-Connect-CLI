@@ -315,6 +315,12 @@ func TestBuildDeepValidationUsesAgreementStatusAndMonetizationRelevance(t *testi
 			if got := deepCheckByID(t, deep, validation.DeepCheckAgreementsActive); got.Status != test.want {
 				t.Fatalf("agreement check = %#v, want %q", got, test.want)
 			}
+			if len(test.status.ContractMessages) > 0 && test.want == validation.DeepStatusBlocked {
+				got := deepCheckByID(t, deep, validation.DeepCheckAgreementsActive)
+				if got.Message != "App Store Connect reports an agreement alert that needs review" || got.Resolution == nil || len(got.Resolution.Commands) != 0 {
+					t.Fatalf("banner-only check = %#v, want alert without acceptance command", got)
+				}
+			}
 		})
 	}
 }
@@ -358,13 +364,16 @@ func TestBuildDeepValidationPreservesAgreementBannerWhenHistoryFails(t *testing.
 	}
 	found := false
 	for _, finding := range findings {
-		if finding.ID == "agreements.pending" {
+		if finding.ID == "agreements.alert" {
+			if finding.Severity != validation.SeverityError || finding.Resolution == nil || len(finding.Resolution.Commands) != 0 || strings.Contains(finding.Remediation, "accept") {
+				t.Fatalf("alert finding must fail closed without acceptance advice: %#v", finding)
+			}
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("findings = %#v, want agreements.pending", findings)
+		t.Fatalf("findings = %#v, want agreements.alert", findings)
 	}
 }
 
