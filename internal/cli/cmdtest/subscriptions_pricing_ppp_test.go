@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rudrankriyam/App-Store-Connect-CLI/internal/cli/shared"
 )
 
 func TestSubscriptionsPricingPPPValidationErrors(t *testing.T) {
@@ -49,6 +52,32 @@ func TestSubscriptionsPricingPPPValidationErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			assertUsageExit(t, append([]string{"subscriptions", "pricing", "ppp"}, test.args...), test.wantErr)
 		})
+	}
+}
+
+func TestPPPTerritoryScopeValidation(t *testing.T) {
+	setupAuth(t)
+	requests := 0
+	installDefaultTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return jsonResponse(http.StatusInternalServerError, `{}`)
+	}))
+	t.Cleanup(func() {
+		if requests != 0 {
+			t.Errorf("validation made %d requests", requests)
+		}
+	})
+	for _, command := range [][]string{
+		{"subscriptions", "pricing", "ppp", "--subscription-id", "8000000001"},
+		{"pricing", "ppp", "--app", "app-1"},
+		{"iap", "pricing", "ppp", "--iap-id", "9000000001"},
+	} {
+		assertUsageExit(t, append(append([]string{}, command...), "--base-price", "4.99", "--dry-run", "--territory", "IN", "--territory", "BR"), "--territory specified multiple times")
+		for _, value := range []string{"", ",,", "Atlantis"} {
+			t.Run(strings.Join(command, " ")+value, func(t *testing.T) {
+				assertUsageExit(t, append(append([]string{}, command...), "--base-price", "4.99", "--dry-run", "--territory", value), "invalid --territory")
+			})
+		}
 	}
 }
 
@@ -191,5 +220,92 @@ func TestSubscriptionsPricingPPPConfirmAppliesChangedTerritoriesAndVerifies(t *t
 	}
 	if result.Summary.Applied != 1 || result.Summary.Verified != 1 || result.Verification.Status != "completed" || result.Verification.Verified != 1 {
 		t.Fatalf("unexpected apply result: summary=%+v verification=%+v", result.Summary, result.Verification)
+	}
+}
+
+func TestSubscriptionsPricingPPPTerritorySelection(t *testing.T) {
+	for _, test := range []struct {
+		selection, territory, status, start string
+		posts                               int
+	}{
+		{"IN,India", "IND", "verified", "", 1},
+		{"USA", "USA", "noop", "", 0},
+		{"TWN", "TWN", "skipped", "", 0},
+		{"IND", "IND", "verified", "2026-11-15", 1},
+	} {
+		t.Run(test.selection+"/"+test.start, func(t *testing.T) {
+			setupAuth(t)
+			restore := shared.SetPricingNowForTesting(func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) })
+			defer restore()
+			priceReads := 0
+			posts := []string{}
+			transport := pppTestTransport(t, "8000000001", &priceReads, &posts)
+			installDefaultTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if test.start != "" && req.Method == http.MethodGet && req.URL.Path == "/v1/subscriptions/8000000001/prices" {
+					prices := []deriveHTTPPrice{{priceID: "p-ind-current", pricePointID: "ind-999", territory: "IND", currency: "INR", customerPrice: "999"}, {priceID: "p-ind-successor", pricePointID: "ind-219", territory: "IND", currency: "INR", customerPrice: "219"}}
+					if len(posts) > 0 {
+						prices = []deriveHTTPPrice{{priceID: "p-ind-applied", pricePointID: "ind-199", territory: "IND", currency: "INR", customerPrice: "199"}}
+					}
+					var payload map[string]any
+					if err := json.Unmarshal([]byte(subscriptionPriceDerivePricesFixture(prices)), &payload); err != nil {
+						return nil, err
+					}
+					for _, item := range payload["data"].([]any) {
+						row := item.(map[string]any)
+						start := ""
+						if row["id"] == "p-ind-successor" {
+							start = test.start
+						}
+						if row["id"] == "p-ind-applied" {
+							start = test.start
+						}
+						row["attributes"].(map[string]any)["startDate"] = start
+					}
+					body, err := json.Marshal(payload)
+					if err != nil {
+						return nil, err
+					}
+					return jsonResponse(http.StatusOK, string(body))
+				}
+
+				if req.Method == http.MethodGet && req.URL.Path == "/v1/subscriptions/8000000001/pricePoints" && req.URL.Query().Get("filter[territory]") == "IND" {
+					return jsonResponse(http.StatusOK, subscriptionPriceDerivePricePointsFixture([]deriveHTTPPricePoint{{id: "ind-199", territory: "IND", customerPrice: "199"}, {id: "ind-219", territory: "IND", customerPrice: "219"}, {id: "ind-999", territory: "IND", customerPrice: "999"}}))
+				}
+				if req.Method == http.MethodGet && req.URL.Path == "/v1/subscriptions/8000000001/pricePoints" && req.URL.Query().Get("filter[territory]") == "TWN" {
+					return jsonResponse(http.StatusOK, subscriptionPriceDerivePricePointsFixture([]deriveHTTPPricePoint{{id: "twn-390", territory: "TWN", customerPrice: "390"}}))
+				}
+				return transport(req)
+			}))
+			args := []string{"--territory", test.selection, "--confirm"}
+			if test.start != "" {
+				args = append(args, "--start-date", test.start)
+			}
+			result := runPPPCommand(t, args...)
+			if len(result.Rows) != 1 || result.Rows[0].Territory != test.territory || result.Rows[0].Status != test.status {
+				t.Fatalf("rows=%+v", result.Rows)
+			}
+			if len(posts) != test.posts {
+				t.Fatalf("POST count=%d, want %d", len(posts), test.posts)
+			}
+			if len(posts) > 0 {
+				var body struct {
+					Data struct {
+						Attributes struct {
+							StartDate string `json:"startDate"`
+						} `json:"attributes"`
+						Relationships map[string]struct{ Data struct{ ID string } }
+					}
+				}
+				if err := json.Unmarshal([]byte(posts[0]), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Data.Attributes.StartDate != test.start {
+					t.Fatalf("POST startDate=%q, want %q", body.Data.Attributes.StartDate, test.start)
+				}
+				if body.Data.Relationships["territory"].Data.ID != "IND" || body.Data.Relationships["subscriptionPricePoint"].Data.ID != "ind-199" {
+					t.Fatalf("POST=%s", posts[0])
+				}
+			}
+		})
 	}
 }

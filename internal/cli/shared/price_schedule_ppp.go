@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -53,6 +54,8 @@ type PriceSchedulePPPSurface struct {
 	// CurrentPrices returns each territory's effective price on the pricing
 	// date containing at.
 	CurrentPrices func(ctx context.Context, at time.Time) ([]ResolvedPriceRow, error)
+	// ReadSchedule returns the complete forward schedule for scoped replacements.
+	ReadSchedule func(ctx context.Context) (PPPScheduleSnapshot, error)
 	// LadderBatch returns the price points of a batch of territories, keyed by
 	// territory, reading every page.
 	LadderBatch func(ctx context.Context, territories []string) (map[string][]PriceLadderCandidate, error)
@@ -93,6 +96,7 @@ func NewPriceSchedulePPPCommand(config PriceSchedulePPPCommandConfig) *ffcli.Com
 
 	resource := config.BindResource(fs)
 	baseTerritory := fs.String("base-territory", "USA", "Base territory (accepts alpha-2, alpha-3, or exact English country name)")
+	selection := BindOnceCSVFlag(fs, "territory", "Only change these territories (comma-separated alpha-2, alpha-3, or English names)")
 	basePrice := fs.String("base-price", "", "Customer price in the base territory (required)")
 	rounding := fs.String("round", string(PriceRoundingNearest), "Price-point resolution: exact, nearest, up, or down")
 	startDate := fs.String("start-date", "", "Future start date (YYYY-MM-DD) for the new prices; current prices apply until then")
@@ -125,7 +129,12 @@ conversion factor, GDP (PA.NUS.PPP) divided by the official exchange rate
 License: CC BY 4.0. Series last updated %[2]s.
 Territories without a price level are skipped and keep their current price.
 
---confirm replaces the whole price schedule: App Store Connect drops every
+--territory limits PPP changes to the listed currently priced countries. Excluded
+manual timelines and automatic pricing mode are preserved, using the original
+schedule base. Changes to that base timeline require omitting --territory for a
+global PPP update. Automatic amounts can still follow Apple FX/tax updates.
+
+Without --territory, --confirm replaces the whole price schedule: App Store Connect drops every
 manual price not in the request, and those territories fall back to automatic
 equalization. The new schedule therefore holds a manual price for every
 territory the %[1]s is priced in: the base territory, each planned
@@ -192,6 +201,10 @@ Examples:
 				effectiveAt = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 12, 0, 0, 0, pricingLocation())
 			}
 
+			selected, err := PPPTerritorySelection(selection)
+			if err != nil {
+				return err
+			}
 			client, err := GetASCClient()
 			if err != nil {
 				return fmt.Errorf("%s: %w", config.ErrorPrefix, err)
@@ -201,6 +214,7 @@ Examples:
 				return err
 			}
 			result, err := runPriceSchedulePPP(ctx, surface, priceSchedulePPPRun{
+				selected:      selected,
 				baseTerritory: territory,
 				baseLevel:     baseLevel,
 				basePrice:     basePriceValue,
@@ -225,6 +239,7 @@ Examples:
 }
 
 type priceSchedulePPPRun struct {
+	selected      []string
 	baseTerritory string
 	baseLevel     *big.Rat
 	basePrice     *big.Rat
@@ -248,7 +263,17 @@ func runPriceSchedulePPP(ctx context.Context, surface PriceSchedulePPPSurface, r
 	}
 
 	fmt.Fprintln(os.Stderr, "Fetching current prices...")
-	current, err := surface.CurrentPrices(ctx, PricingNow())
+	var snapshot PPPScheduleSnapshot
+	var current []ResolvedPriceRow
+	var err error
+	if len(run.selected) > 0 {
+		snapshot, err = surface.ReadSchedule(ctx)
+		if err == nil {
+			current, err = SelectPPPCurrentPrices(snapshot.Prices, run.selected, PricingNow())
+		}
+	} else {
+		current, err = surface.CurrentPrices(ctx, PricingNow())
+	}
 	if err != nil {
 		return priceSchedulePPPOutcome{}, fmt.Errorf("fetch current prices: %w", err)
 	}
@@ -257,6 +282,13 @@ func runPriceSchedulePPP(ctx context.Context, surface PriceSchedulePPPSurface, r
 	}
 	currentByTerritory := make(map[string]ResolvedPriceRow, len(current)+1)
 	for _, row := range current {
+		if len(run.selected) > 0 {
+			if effective, ok := pppPriceAt(snapshot.Prices, row.Territory, run.effectiveAt); ok {
+				row = effective
+			} else {
+				return priceSchedulePPPOutcome{}, fmt.Errorf("no effective price for %s at requested date", row.Territory)
+			}
+		}
 		currentByTerritory[strings.ToUpper(strings.TrimSpace(row.Territory))] = row
 	}
 	territories := make([]string, 0, len(currentByTerritory)+1)
@@ -267,6 +299,16 @@ func runPriceSchedulePPP(ctx context.Context, surface PriceSchedulePPPSurface, r
 		territories = append(territories, run.baseTerritory)
 	}
 	sort.Strings(territories)
+	targetTerritories := append([]string(nil), territories...)
+	if len(run.selected) > 0 {
+		targetTerritories = run.selected
+		for _, row := range snapshot.Prices {
+			if row.Manual != nil && *row.Manual && !slices.Contains(territories, row.Territory) {
+				territories = append(territories, row.Territory)
+			}
+		}
+		sort.Strings(territories)
+	}
 
 	fmt.Fprintf(os.Stderr, "Fetching price points for %d territories...\n", len(territories))
 	ladders, err := fetchPriceLadders(ctx, surface, territories, run.workers)
@@ -286,7 +328,7 @@ func runPriceSchedulePPP(ctx context.Context, surface PriceSchedulePPPSurface, r
 	equalized[run.baseTerritory] = []PriceLadderCandidate{{PricePointID: baseResolution.PricePointID, CustomerPrice: baseResolution.CustomerPrice}}
 
 	rows := make([]asc.SubscriptionPricingDeriveRow, 0, len(territories))
-	for _, territory := range territories {
+	for _, territory := range targetTerritories {
 		var currentRow *ResolvedPriceRow
 		if row, ok := currentByTerritory[territory]; ok {
 			row.PricePointID = ladderPricePointID(ladders[territory], row.PricePointID, key)
@@ -339,13 +381,32 @@ func runPriceSchedulePPP(ctx context.Context, surface PriceSchedulePPPSurface, r
 			"%d territories could not be resolved; no changes were applied", result.Summary.Unresolved,
 		)}, nil
 	}
+	prices := scheduledPPPPrices(rows, run.startDate)
+	base := run.baseTerritory
+	if len(run.selected) > 0 {
+		if result.Summary.Planned == 0 {
+			return priceSchedulePPPOutcome{output: result}, nil
+		}
+		prices, err = scopedPPPPrices(snapshot, rows, run, ladders, key)
+		if err != nil {
+			return priceSchedulePPPOutcome{}, err
+		}
+		base = snapshot.BaseTerritory
+	}
 	if run.dryRun {
 		return priceSchedulePPPOutcome{output: result}, nil
 	}
-
-	prices := scheduledPPPPrices(rows, run.startDate)
+	if len(run.selected) > 0 {
+		fresh, err := surface.ReadSchedule(ctx)
+		if err != nil {
+			return priceSchedulePPPOutcome{}, fmt.Errorf("pre-write schedule read: %w", err)
+		}
+		if !samePPPSnapshot(snapshot, fresh, key) {
+			return priceSchedulePPPOutcome{}, fmt.Errorf("price schedule changed during planning; no changes were applied")
+		}
+	}
 	fmt.Fprintf(os.Stderr, "Replacing the price schedule with %d manual prices...\n", len(prices))
-	if err := surface.ReplaceSchedule(ctx, run.baseTerritory, prices); err != nil {
+	if err := surface.ReplaceSchedule(ctx, base, prices); err != nil {
 		for index := range result.Rows {
 			if result.Rows[index].Status == "planned" {
 				result.Rows[index].Status = "failed"
@@ -365,6 +426,12 @@ func runPriceSchedulePPP(ctx context.Context, surface PriceSchedulePPPSurface, r
 
 	fmt.Fprintln(os.Stderr, "Verifying prices...")
 	verifyErr := verifyPriceSchedulePPP(ctx, surface, key, run.effectiveAt, result)
+	if len(run.selected) > 0 {
+		if err := verifyScopedPPPSchedule(ctx, surface, snapshot, rows, prices, ladders, run.startDate, key); err != nil {
+			result.Verification.Status = "failed"
+			verifyErr = err
+		}
+	}
 	result.Summary = SummarizePriceLadderRows(result.Rows)
 	result.Summary.Applied = applied
 	return priceSchedulePPPOutcome{output: result, err: verifyErr}, nil

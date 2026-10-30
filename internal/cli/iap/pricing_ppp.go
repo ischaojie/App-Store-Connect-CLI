@@ -24,7 +24,7 @@ func IAPPricingPPPCommand() *ffcli.Command {
 		ErrorPrefix:  "iap pricing ppp",
 		Examples: `  asc iap pricing ppp --iap-id "IAP_ID" --base-price "4.99" --dry-run
   asc iap pricing ppp --iap-id "IAP_ID" --base-price "4.99" --round down --dry-run --output table
-  asc iap pricing ppp --iap-id "IAP_ID" --base-price "4.99" --confirm
+  asc iap pricing ppp --iap-id "IAP_ID" --base-price "4.99" --territory "IN,BR,MX" --confirm
   asc iap pricing ppp --iap-id "IAP_ID" --base-territory "GBR" --base-price "3.99" --start-date "YYYY-MM-DD" --confirm`,
 		BindResource: func(fs *flag.FlagSet) shared.PriceSchedulePPPResource {
 			iapID := shared.BindResourceIDFlag(fs, "iap-id", "inAppPurchases", "In-app purchase ID, product ID, or exact current name (required)")
@@ -53,6 +53,9 @@ func iapPPPSurface(client *asc.Client, iapID string) shared.PriceSchedulePPPSurf
 	return shared.PriceSchedulePPPSurface{
 		IAPID:           iapID,
 		LadderBatchSize: 10,
+		ReadSchedule: func(ctx context.Context) (shared.PPPScheduleSnapshot, error) {
+			return readIAPPPPSchedule(ctx, client, iapID)
+		},
 		CurrentPrices: func(ctx context.Context, at time.Time) ([]shared.ResolvedPriceRow, error) {
 			schedule, err := shared.RetryReadWithFreshTimeout(ctx, func(requestCtx context.Context) (*asc.InAppPurchasePriceScheduleResponse, error) {
 				return client.GetInAppPurchasePriceSchedule(requestCtx, iapID)
