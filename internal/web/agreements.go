@@ -114,14 +114,24 @@ func (c *Client) GetAgreementHistory(ctx context.Context) (*asc.WebAgreementsSta
 
 func (c *Client) applyAgreementHistory(result *asc.WebAgreementsStatusResult, envelope *developerAgreementsEnvelope) {
 	agreements := make([]asc.WebAgreement, 0, len(envelope.Agreements))
+	result.PendingAgreementIDs = []string{}
+	result.Warnings = []string{}
+	historyPending := false
 	for _, record := range envelope.Agreements {
 		agreement := c.newAgreement(record)
 		if agreement.Pending {
+			historyPending = true
+			if id := strings.TrimSpace(agreement.AgreementID); id != "" {
+				result.PendingAgreementIDs = append(result.PendingAgreementIDs, id)
+			}
 			result.Pending = true
 		}
 		agreements = append(agreements, agreement)
 	}
 	result.Agreements = agreements
+	if len(result.ContractMessages) > 0 && !historyPending {
+		result.Warnings = append(result.Warnings, "App Store Connect reports an agreement alert, but the available agreement history does not identify a pending agreement. Review the alert in App Store Connect.")
+	}
 }
 
 // fetchAgreementHistory bootstraps the Developer Portal session and returns the

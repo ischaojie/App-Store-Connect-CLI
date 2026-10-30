@@ -268,6 +268,8 @@ Finance reports use Apple fiscal months (`YYYY-MM`), not calendar months.
 
 ## Developer Portal Agreements (web session)
 
+- App Store Connect contract alerts can coexist with Developer Portal history in which every returned agreement is accepted. The compatibility `pending` field includes alerts; `pendingAgreementIds` lists only IDs from pending history rows. A banner without a pending history row produces a warning, not an ID to accept. Review the alert in App Store Connect and the Apple Developer account; this mismatch does not establish that the alert is stale or that no new agreement exists.
+
 - `asc web agreements status|accept|download` uses `POST /services-account/QH65B2/account/getAgreementHistory` and `POST /services-account/QH65B2/account/acceptAgreements` (HTTP 200 with `resultCode=0` on success). `accept` re-reads `getAgreementHistory` to verify `dateAccepted >= dateEffective`. `download` resolves root-relative `agreementDownloadUrl` paths against the Developer Portal origin (same-origin HTTPS only, non-empty/non-HTML) and redacts the URL from download receipts and errors.
 
 ## Transaction Tax reports (web session)

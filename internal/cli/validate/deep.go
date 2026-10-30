@@ -397,6 +397,7 @@ func collectAgreementsDeepCheck(ctx context.Context, client deepWebClient, requi
 	}
 	acceptIDs := make([]string, 0, len(status.Agreements))
 	hasPending := false
+	hasAlert := false
 	hasManualBlocker := false
 	hasUnknown := false
 	hasRelevantEvidence := false
@@ -414,7 +415,7 @@ func collectAgreementsDeepCheck(ctx context.Context, client deepWebClient, requi
 		}
 		if strings.Contains(messageText, "agreement") || strings.Contains(messageText, "contract") {
 			hasRelevantEvidence = true
-			hasPending = true
+			hasAlert = true
 			hasManualBlocker = true
 			continue
 		}
@@ -464,7 +465,7 @@ func collectAgreementsDeepCheck(ctx context.Context, client deepWebClient, requi
 	if err != nil {
 		hasUnknown = true
 	}
-	if !hasPending && !hasUnknown {
+	if !hasPending && !hasAlert && !hasUnknown {
 		return validation.DeepCheck{
 			ID:      validation.DeepCheckAgreementsActive,
 			Status:  validation.DeepStatusPassed,
@@ -472,7 +473,7 @@ func collectAgreementsDeepCheck(ctx context.Context, client deepWebClient, requi
 			Message: "Required agreements are active",
 		}, nil
 	}
-	if !hasPending {
+	if !hasPending && !hasAlert {
 		check := unverifiedWebCheck(validation.DeepCheckAgreementsActive, "Apple returned an empty or unknown agreement status", agreementsAppStoreConnectURL)
 		return check, unverifiedFinding("deep.agreements.active.unverified", check.Message, "Inspect current agreement status with `asc web agreements status`", "agreement", "", check.Resolution)
 	}
@@ -497,11 +498,18 @@ func collectAgreementsDeepCheck(ctx context.Context, client deepWebClient, requi
 		Message:    "A required agreement is pending",
 		Resolution: resolution,
 	}
+	findingID := "agreements.pending"
+	remediation := "Have the Account Holder review and accept the pending agreement"
+	if !hasPending {
+		check.Message = "App Store Connect reports an agreement alert that needs review"
+		findingID = "agreements.alert"
+		remediation = "Inspect the alert in App Store Connect and review the Apple Developer account; agreement history does not confirm a pending agreement"
+	}
 	return check, &validation.CheckResult{
-		ID:           "agreements.pending",
+		ID:           findingID,
 		Severity:     validation.SeverityError,
 		Message:      check.Message,
-		Remediation:  "Have the Account Holder review and accept the pending agreement",
+		Remediation:  remediation,
 		ResourceType: "agreement",
 		Resolution:   resolution,
 	}
